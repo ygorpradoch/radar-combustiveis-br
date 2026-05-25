@@ -1,0 +1,25 @@
+# credenciais GCP — NUNCA versionar
+gcp/
+*.json
+
+# variáveis de ambiente com valores reais
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Airflow (gerado em runtime)
+logs/
+airflow.db
+airflow.cfg
+
+# Power BI
+*.pbix
+
+# OS
+.DS_Store
+Thumbs.db
