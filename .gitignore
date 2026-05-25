@@ -23,3 +23,5 @@ airflow.cfg
 # OS
 .DS_Store
 Thumbs.db
+# ambiente virtual
+.venv/
