@@ -41,3 +41,11 @@ por estarem fragmentados em múltiplos arquivos e não agregarem valor
    Decisão: nunca comparar preços entre produtos diferentes
    sem filtrar por unidade de medida. Médias nacionais
    serão sempre calculadas dentro do mesmo produto.
+
+
+## Decisão — Onde tratar inconsistência de unidade de medida
+
+Optamos por não normalizar na ingestão para preservar o dado bruto
+na camada raw. A normalização de "R$/13Kg" e "R$/13kg" para um
+padrão único será feita no SQL de staging (Fase 3), mantendo
+rastreabilidade e facilitando manutenção futura.

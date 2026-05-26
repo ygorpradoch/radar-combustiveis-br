@@ -4,6 +4,8 @@ from google.cloud import bigquery
 
 import os
 
+def carregar_gcs_bqr(df : pd.DataFrame):
+    
 #Credencial
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\ygorc\OneDrive\Área de Trabalho\aPortifolio\projeto_atual-Radar-Combustiveis\gcp\sa.json"
 
@@ -20,8 +22,6 @@ print("dataset lido")
 #Tratamento
 for col in df.select_dtypes(include="object").columns:
     df[col] = df[col].replace("-", None)    
-
-
 
 # Fazer upload do arquivo para o gcs (preciso de orientação)
 client = storage.Client()
