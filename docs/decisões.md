@@ -42,10 +42,55 @@ por estarem fragmentados em múltiplos arquivos e não agregarem valor
    sem filtrar por unidade de medida. Médias nacionais
    serão sempre calculadas dentro do mesmo produto.
 
-
 ## Decisão — Onde tratar inconsistência de unidade de medida
 
 Optamos por não normalizar na ingestão para preservar o dado bruto
 na camada raw. A normalização de "R$/13Kg" e "R$/13kg" para um
 padrão único será feita no SQL de staging (Fase 3), mantendo
 rastreabilidade e facilitando manutenção futura.
+
+
+
+## Fase 2 — Orquestração e validação
+
+**Ferramenta:** Apache Airflow 3.1.7 em Docker local
+
+**Decisão: TaskFlow API**
+Usamos o decorator @task em vez da API clássica do Airflow.
+Código mais limpo e dependências entre tasks definidas
+implicitamente pelo retorno de funções.
+
+**Decisão: parquet como formato intermediário**
+Dataframes não trafegam entre tasks via XCom (limite de tamanho).
+A task extrair salva em /tmp/anp_estados.parquet e passa só
+o caminho. As tasks seguintes leem o arquivo pelo caminho.
+Parquet preserva tipos (datas e floats chegam corretos).
+
+**Decisão: tratar traços na task extrair**
+O replace("-", None) foi movido para a task extrair antes do
+to_parquet, porque o pyarrow não aceita strings em colunas
+numéricas na conversão. O dado já entra limpo no parquet.
+
+**Validação como portão**
+Schema Pandera valida ESTADO, PRODUTO, UNIDADE DE MEDIDA,
+DATA INICIAL e PREÇO MÉDIO REVENDA. Se qualquer regra falhar,
+a task validar lança exceção e carregar nunca executa.
+Testado com falha proposital: comportamento confirmado.
+
+
+
+## Decisão de grão — fato_preco_estados
+
+Grão: produto + estado + semana (DATA INICIAL)
+Uma linha = estatísticas de preço de um produto em um estado
+em uma semana específica.
+
+As quatro perguntas de negócio são respondidas com esse grão:
+
+- ranking por estado/produto → GROUP BY estado, produto
+- evolução temporal → ORDER BY data_inicial
+- margem → PREÇO MÉDIO REVENDA - PREÇO MÉDIO DISTRIBUIÇÃO
+- anomalia → comparar com média regional/nacional
+
+Grão de município foi descartado (fragmentação dos arquivos).
+Pode entrar numa v2.
