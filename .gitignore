@@ -25,3 +25,4 @@ airflow.cfg
 Thumbs.db
 # ambiente virtual
 .venv/
+.claude

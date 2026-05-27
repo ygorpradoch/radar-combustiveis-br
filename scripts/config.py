@@ -1,0 +1,8 @@
+ARQUIVO_XLSX = "/opt/airflow/scripts/semanal-estados-desde-2013.xlsx"
+ARQUIVO_TEMP = "/tmp/anp_estados.parquet"
+BUCKET       = "radar-combustiveis-raw"
+PROJETO      = "radar-combustiveis-br"
+TABELA_RAW   = f"{PROJETO}.raw.precos_estados"
+TABELA_CTRL  = f"{PROJETO}.raw.controle_carga"
+TABELA_STG   = f"{PROJETO}.staging.stg_precos_estados"
+TABELA_FATO  = f"{PROJETO}.mart.fato_preco_estados"

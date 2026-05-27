@@ -21,8 +21,12 @@ schema = pa.DataFrameSchema({
     "PREÇO MÉDIO REVENDA": Column(float, Check.gt(0))
 })
 
-def validar_dataframe(df):
+
+
+def validar_dataframe(caminho):
+    df = pd.read_parquet(caminho)
     schema.validate(df, lazy=True)
     print(f"Validação ok — {len(df):,} linhas verificadas")
+    return caminho
 
 
