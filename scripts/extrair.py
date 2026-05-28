@@ -30,11 +30,6 @@ def extrair_function() -> str:
     if df.empty:
         raise AirflowSkipException("Nenhum dado novo para processar")
 
-    #Tratamento
-    for col in df.select_dtypes(include="object").columns:
-        df[col] = df[col].replace("-", None) 
-
-
     df.to_parquet(ARQUIVO_TEMP, index=False)
     print(f"extraido com {len(df)} linhas")
     return ARQUIVO_TEMP

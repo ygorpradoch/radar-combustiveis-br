@@ -23,6 +23,9 @@ airflow.cfg
 # OS
 .DS_Store
 Thumbs.db
+
 # ambiente virtual
 .venv/
+
+# Claude Code
 .claude

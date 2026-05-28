@@ -9,6 +9,7 @@ from extrair import extrair_function
 from carregar import carregar_function
 from atualizar_stg import atualizar_stg_function
 from atualizar_mart import atualizar_mart_function
+from tratamento import tratar_function
 
 
 @dag(
@@ -25,6 +26,10 @@ def pipeline_anp():
     def extrair() -> str:
         return extrair_function()
     
+    @task
+    def tratar(caminho : str) -> str:
+        return tratar_function(caminho)
+
     @task
     def validar(caminho: str) -> str:
         return validar_dataframe(caminho)
@@ -43,7 +48,8 @@ def pipeline_anp():
         
 
 
-    carregado = carregar(validar(extrair()))
+    carregado = carregar(validar(tratar(extrair())))
     carregado >> atualizar_staging() >> atualizar_mart()
+
 
 pipeline_anp()

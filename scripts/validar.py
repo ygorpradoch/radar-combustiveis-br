@@ -8,10 +8,9 @@ estados_validos = ['ACRE' ,'ALAGOAS', 'AMAPA', 'AMAZONAS', 'BAHIA', 'CEARA', 'DI
  'RIO DE JANEIRO', 'RIO GRANDE DO NORTE', 'RIO GRANDE DO SUL', 'RONDONIA',
  'RORAIMA', 'SANTA CATARINA', 'SAO PAULO', 'SERGIPE', 'TOCANTINS']
 
-produtos_validos = ['ETANOL HIDRATADO', 'GASOLINA COMUM', 'GLP', 'GNV' ,'OLEO DIESEL',
- 'OLEO DIESEL S10', 'GASOLINA ADITIVADA']
+produtos_validos = ['ETANOL HIDRATADO', 'GASOLINA COMUM', 'OLEO DIESEL', 'OLEO DIESEL S10', 'GASOLINA ADITIVADA']
 
-unidades_medida_validas = ['R$/l', 'R$/13Kg', 'R$/m3' ,'R$/13kg', 'R$/m³']
+unidades_medida_validas = ['R$/l']
 
 schema = pa.DataFrameSchema({
     "UNIDADE DE MEDIDA" : Column(str, Check.isin(unidades_medida_validas)),
