@@ -1,342 +1,218 @@
-## Decisão de grão — Fonte principal
+## Decisão de grão — fonte principal
 
-Escolhemos o arquivo de Estados (granularidade UF/semana/produto)
-como fonte principal da fato. Municípios foram descartados na Fase 1
-por estarem fragmentados em múltiplos arquivos e não agregarem valor
-às perguntas de negócio definidas. Podem entrar numa v2.
+Usei o arquivo de estados (granularidade UF/semana/produto) como fonte da tabela fato. O arquivo de municípios foi descartado na Fase 1: os dados estão fragmentados em vários arquivos e não respondem às perguntas de negócio que defini. Pode entrar numa v2.
 
 ## Inspeção do arquivo ANP — semanal-estados-desde-2013.xlsx
 
-******Formato:****** Excel (.xlsx), cabeçalho real na linha 18
-(linhas 1-17 são metadados descritivos da ANP)
+Formato: Excel (.xlsx), cabeçalho real na linha 18. As linhas 1-17 são metadados da ANP.
 
-******Volume:****** 112.079 linhas × 18 colunas
+Volume: 112.079 linhas × 18 colunas.
 
-******O que está limpo:******
-**-** Datas já vêm como datetime64, sem conversão necessária
-**-** Preços de revenda (PREÇO MÉDIO REVENDA) vêm como float64
-**-** REGIÃO, ESTADO e PRODUTO sem nulos
+O que já vem limpo:
+- Datas como datetime64, sem conversão
+- Preços de revenda como float64
+- REGIÃO, ESTADO e PRODUTO sem nulos
 
-******Problemas encontrados e decisões de tratamento:******
+Problemas encontrados:
 
-**1.** Nulos disfarçados: ~54.833 ocorrências do valor "-" nas colunas
-   de distribuição (MARGEM, PREÇO MÉDIO, DESVIO PADRÃO, etc).
-   Motivo: ANP substituiu nulos por traço na planilha.
-   Tratamento: converter "-" para NULL no staging.
+**1. Nulos disfarçados de traço.** Cerca de 54.833 ocorrências do valor `"-"` nas colunas de distribuição (margem, preço médio de distribuição, desvio padrão). A ANP preencheu as células vazias com traço em vez de deixá-las em branco. O pandas lê a coluna inteira como `object` por causa disso.
+Tratamento: converter `"-"` para `None` antes de salvar o parquet.
 
-**2.** Colunas de distribuição como object: consequência direta
-   dos traços. Com "-" na coluna, pandas não consegue inferir
-   float64. Tratamento: após converter "-" para NULL, castear
-   para NUMERIC no staging.
+**2. Colunas de distribuição como object.** Consequência direta dos traços. Com `"-"` na coluna, o pandas não infere float64.
+Tratamento: depois de converter os traços, usar `SAFE_CAST` para `NUMERIC` no staging.
 
-**3.** Inconsistência de grafia na unidade de medida:
-**-** GLP: "R$/13Kg" (10.661 linhas) e "R$/13kg" (7.902 linhas)
-**-** GNV: "R$/m3" (6.615 linhas) e "R$/m³" (4.946 linhas)
-   Tratamento: normalizar para uppercase no staging.
+**3. Inconsistência de grafia na unidade de medida.**
+- GLP: `"R$/13Kg"` (10.661 linhas) e `"R$/13kg"` (7.902 linhas)
+- GNV: `"R$/m3"` (6.615 linhas) e `"R$/m³"` (4.946 linhas)
+Tratamento: normalizar com `UPPER()` no staging.
 
-**4.** Produtos com unidades incomparáveis entre si:
-**-** Combustíveis líquidos: R$/l
-**-** GLP: R$/13Kg (botijão)
-**-** GNV: R$/m³
-   Decisão: nunca comparar preços entre produtos diferentes
-   sem filtrar por unidade de medida. Médias nacionais
-   serão sempre calculadas dentro do mesmo produto.
+**4. Produtos com unidades incomparáveis.**
+- Combustíveis líquidos: R$/l
+- GLP: R$/13Kg (botijão)
+- GNV: R$/m³
 
-## Decisão — Onde tratar inconsistência de unidade de medida
+Decisão: não comparar preços entre produtos de unidades diferentes. Médias nacionais sempre dentro do mesmo produto.
 
-Optamos por não normalizar na ingestão para preservar o dado bruto
-na camada raw. A normalização de "R$/13Kg" e "R$/13kg" para um
-padrão único será feita no SQL de staging (Fase 3), mantendo
-rastreabilidade e facilitando manutenção futura.
+## Decisão — onde normalizar a unidade de medida
 
-## Fase 2 — Orquestração e validação
+Não normalizei na ingestão para preservar o dado bruto no raw. A normalização de `"R$/13Kg"` e `"R$/13kg"` para um padrão único fica no SQL de staging (Fase 3). Assim dá para rastrear o que veio da fonte original.
 
-**Ferramenta:** Apache Airflow 3.1.7 em Docker local
+## Fase 2 — orquestração e validação
 
-**Decisão: TaskFlow API**
-Usamos o decorator @task em vez da API clássica do Airflow.
-Código mais limpo e dependências entre tasks definidas
-implicitamente pelo retorno de funções.
+Ferramenta: Apache Airflow 3.1.7 em Docker local.
 
-**Decisão: parquet como formato intermediário**
-Dataframes não trafegam entre tasks via XCom (limite de tamanho).
-A task extrair salva em /tmp/anp_estados.parquet e passa só
-o caminho. As tasks seguintes leem o arquivo pelo caminho.
-Parquet preserva tipos (datas e floats chegam corretos).
+**TaskFlow API.** Usei o decorator `@task` em vez da API clássica. As dependências entre tasks ficam implícitas pelo retorno das funções, sem precisar declarar `set_downstream`.
 
-**Decisão: tratar traços na task extrair**
-O replace("-", None) foi movido para a task extrair antes do
-to_parquet, porque o pyarrow não aceita strings em colunas
-numéricas na conversão. O dado já entra limpo no parquet.
+**Parquet como formato intermediário.** Dataframes não passam entre tasks via XCom por causa do limite de tamanho. A task `extrair` salva em `/tmp/anp_estados.parquet` e passa só o caminho. As tasks seguintes leem o arquivo pelo caminho. Parquet preserva tipos, então datas e floats chegam corretos.
 
-**Validação como portão**
-Schema Pandera valida ESTADO, PRODUTO, UNIDADE DE MEDIDA,
-DATA INICIAL e PREÇO MÉDIO REVENDA. Se qualquer regra falhar,
-a task validar lança exceção e carregar nunca executa.
-Testado com falha proposital: comportamento confirmado.
+**Tratar traços na task extrair (decisão inicial).** O `replace("-", None)` precisou ir para antes do `to_parquet` porque o pyarrow não aceita strings em colunas numéricas na conversão. Isso foi depois refatorado para uma task separada (ver seção "Task tratar").
+
+**Validação como portão.** O schema Pandera valida ESTADO, PRODUTO, UNIDADE DE MEDIDA, DATA INICIAL e PREÇO MÉDIO REVENDA. Se qualquer regra falhar, a task `validar` lança exceção e `carregar` nunca executa. Testei com falha proposital e o comportamento foi confirmado.
 
 ## Decisão de grão — fato_preco_estados
 
-Grão: produto + estado + semana (DATA INICIAL)
-Uma linha = estatísticas de preço de um produto em um estado
-em uma semana específica.
+Grão: produto + estado + semana (DATA INICIAL). Uma linha representa as estatísticas de preço de um produto em um estado em uma semana.
 
 As quatro perguntas de negócio são respondidas com esse grão:
+- ranking por estado/produto: `GROUP BY estado, produto`
+- evolução temporal: `ORDER BY data_inicial`
+- margem: `PREÇO MÉDIO REVENDA - PREÇO MÉDIO DISTRIBUIÇÃO`
+- anomalia: comparar com média regional/nacional
 
-- ranking por estado/produto → GROUP BY estado, produto
-- evolução temporal → ORDER BY data_inicial
-- margem → PREÇO MÉDIO REVENDA - PREÇO MÉDIO DISTRIBUIÇÃO
-- anomalia → comparar com média regional/nacional
+Grão de município descartado por causa da fragmentação dos arquivos. Pode entrar numa v2.
 
-Grão de município foi descartado (fragmentação dos arquivos).
-Pode entrar numa v2.
+## Fase 3 — staging e modelagem dimensional
 
+Camadas criadas:
 
-## Fase 3 — Staging e modelagem dimensional
+- `staging.stg_precos_estados`: dado limpo com tipos corrigidos, unidade normalizada com `UPPER()`, datas convertidas para DATE, colunas de distribuição convertidas com `SAFE_CAST` para NUMERIC.
+- `mart.dim_tempo`: calendário diário contíguo de 2012-12-30 a 2026-12-31, gerado com `GENERATE_DATE_ARRAY + UNNEST`. Precisa ser diário para o Power BI funcionar (ver abaixo).
+- `mart.fato_preco_estados`: tabela fato com `PARTITION BY data_inicial` e `CLUSTER BY estado, produto`.
 
-**Camadas criadas:**
+**PARTITION BY + CLUSTER BY na fato.** Partição por data reduz o custo de cada query no Power BI porque o BigQuery lê só as partições necessárias. Cluster por estado e produto acelera os filtros mais comuns do relatório.
 
-- staging.stg_precos_estados: dado limpo, tipos corrigidos,
-  unidade normalizada com UPPER(), datas convertidas para DATE,
-  colunas de distribuição convertidas com SAFE_CAST para NUMERIC.
-- mart.dim_tempo: calendário diário contíguo de 2012-12-30 a
-  2026-12-31, gerado com GENERATE_DATE_ARRAY + UNNEST.
-  Necessário para time intelligence no Power BI.
-- mart.fato_preco_estados: tabela fato com PARTITION BY
-  data_inicial e CLUSTER BY estado, produto.
+**dim_tempo diária, não semanal.** O Power BI exige tabela de datas contígua para funções de time intelligence. Uma tabela só com as datas semanais da ANP teria lacunas que quebram `DATEADD` e `SAMEPERIODLASTYEAR`.
 
-**Decisão: PARTITION BY + CLUSTER BY na fato**
-Partição por data reduz custo de query no Power BI e sustenta
-idempotência na Fase 4 (reprocessar uma semana sobrescreve
-só a partição dela). Cluster por estado e produto acelera
-os filtros mais comuns do relatório.
+## Fase 4 — carga incremental e idempotência
 
-**Decisão: dim_tempo diária, não semanal**
-Power BI exige tabela de datas contígua para time intelligence.
-Tabela semanal criaria lacunas que quebram funções como
-DATEADD e SAMEPERIODLASTYEAR.
+**MERGE na staging, CREATE OR REPLACE na fato.**
 
-## Fase 4 — Carga incremental e idempotência
+A staging usa `MERGE` com chave `data_inicial + estado + produto` (o grão da fato). Rodar o pipeline duas vezes com o mesmo dado não gera duplicatas. O `MERGE` atualiza linhas existentes (para absorver correções retroativas da ANP) e insere só o que é novo.
 
-**Decisão: MERGE na staging, CREATE OR REPLACE na fato**
+A fato usa `CREATE OR REPLACE` porque é uma materialização direta da staging, que já é idempotente. Recriar a fato a partir de uma staging limpa sempre produz o mesmo resultado. O trade-off é custo: a cada execução toda a staging é relida. Para 112k linhas isso é aceitável. Em volumes maiores o ideal seria `MERGE` na fato também.
 
-A staging usa MERGE com chave data_inicial + estado + produto
-(o grão da fato). Isso garante idempotência real: rodar o pipeline
-duas vezes com o mesmo dado não gera duplicatas. O MERGE atualiza
-linhas existentes (para absorver correções retroativas da ANP) e
-insere apenas o que é novo.
+**MERGE atômico no controle de carga.**
 
-A fato usa CREATE OR REPLACE porque é uma materialização direta
-da staging, que já é idempotente. Recriar a fato a partir de uma
-staging limpa sempre produz o mesmo resultado sem duplicatas.
-O trade-off é custo: a cada execução toda a staging é relida para
-recriar a fato, independente do volume do lote. Para o volume atual
-(~112k linhas) essa troca é aceitável. Num volume maior o ideal
-seria MERGE também na fato com a mesma chave de negócio.
+O controle de carga (`raw.controle_carga`) registra a última data carregada. Troquei `DELETE + INSERT` por um único `MERGE ON TRUE`. O motivo: `DELETE + INSERT` não é atômico. Se falha entre os dois comandos, a tabela fica vazia e o pipeline recarrega a série completa na próxima execução. O `MERGE` faz tudo em uma operação.
 
-**Decisão: MERGE atômico no controle de carga**
+**Fallback para primeira execução.**
 
-O controle de carga (raw.controle_carga) registra a última data
-carregada para filtrar apenas dados novos na próxima execução.
-Substituímos o DELETE+INSERT por um único MERGE com ON TRUE.
-Motivo: DELETE+INSERT não é atômico — uma falha entre os dois
-comandos deixa a tabela vazia, forçando reprocessamento completo
-na próxima execução. O MERGE resolve isso em uma operação só.
+Se `controle_carga` não existe ou está vazia, a DAG usa `pd.Timestamp("2012-12-29")` como data de referência e carrega a série histórica completa. O pipeline roda do zero sem configuração manual.
 
-**Decisão: fallback para primeira execução**
+**AirflowSkipException para lote vazio.**
 
-Se controle_carga não existir ou estiver vazia, a DAG usa
-pd.Timestamp("2012-12-29") como data de referência, carregando
-a série histórica completa. Isso permite que o pipeline rode do
-zero sem configuração manual prévia.
+Se não há dados novos depois do filtro incremental, a DAG lança `AirflowSkipException` em vez de falhar. "Não havia nada para fazer" é diferente de "deu erro". O Airflow propaga o skip para todas as tasks dependentes automaticamente.
 
-**Decisão: AirflowSkipException para lote vazio**
+**create_bqstorage_client=False na leitura do controle.**
 
-Se não há dados novos após o filtro incremental, a DAG lança
-AirflowSkipException em vez de falhar. Skip é a semântica correta:
-"não havia nada para fazer" é diferente de "deu erro". O Airflow
-propaga o skip automaticamente para todas as tasks dependentes.
+O `.to_dataframe()` do BigQuery usa por padrão a BigQuery Storage API, que exige a permissão `bigquery.readsessions.create` na service account. Essa permissão não estava concedida, então o fallback de 2012 era ativado a cada execução e recarregava as 112k linhas inteiras. A correção foi passar `create_bqstorage_client=False`. Para uma query de 1 linha, a API REST padrão é suficiente.
 
-**Decisão: create_bqstorage_client=False na leitura do controle**
+**ROW_NUMBER() para deduplicar o source do MERGE.**
 
-O método .to_dataframe() do BigQuery usa por padrão a BigQuery
-Storage API para leitura rápida, o que exige a permissão
-bigquery.readsessions.create na service account. Como essa permissão
-não estava concedida (princípio do menor privilégio), o fallback de
-2012-12-29 era acionado a cada execução, carregando a série completa
-repetidamente. A correção foi passar create_bqstorage_client=False,
-forçando o uso da API REST padrão. Para uma query de 1 linha como
-essa, não há diferença de performance.
+O raw usa `WRITE_APPEND` por design: é um log de todas as cargas. Em reprocessamentos, o raw acumula duplicatas para a mesma chave `data_inicial + estado + produto`. O BigQuery exige que cada linha do destino do `MERGE` corresponda a no máximo uma linha do source. Sem deduplicação, o `MERGE` falha.
 
-**Decisão: ROW_NUMBER() para deduplicar o source do MERGE**
+A solução foi envolver o `SELECT` do `USING` em uma subconsulta com `ROW_NUMBER()` particionado pela chave de negócio, mantendo só a primeira ocorrência. Validado em teste: raw com 224.158 linhas (duplicado intencional), staging ficou em 112.079.
 
-O raw usa WRITE_APPEND por design — é um log imutável de todas as
-cargas. Em reprocessamentos ou testes, o raw pode acumular duplicatas
-para a mesma chave data_inicial + estado + produto. O BigQuery exige
-que cada linha do destino do MERGE corresponda a no máximo uma linha
-do source, então sem deduplicação o MERGE falharia. A solução foi
-envolver o SELECT do USING em uma subconsulta com ROW_NUMBER()
-particionado pela chave de negócio, mantendo apenas a primeira
-ocorrência de cada combinação. Isso foi validado em teste: raw com
-224.158 linhas (duplicado), staging permaneceu em 112.079 (correto).
+## Reposicionamento de escopo — produtos filtrados
 
-## Reposicionamento de escopo — Produtos filtrados
+O dataset original tem 7 produtos:
+- GASOLINA COMUM, GASOLINA ADITIVADA, ETANOL HIDRATADO, OLEO DIESEL, OLEO DIESEL S10 (postos de combustível)
+- GLP (R$/13kg, botijão de gás de cozinha) — excluído
+- GNV (R$/m³, gás natural veicular) — excluído
 
-**Decisão: manter apenas combustíveis vendidos em postos de abastecimento**
+O projeto monitora preços em postos de abastecimento. GLP e GNV têm unidades incomparáveis com os demais. Na prática, o GLP em torno de R$100 por botijão comprimia todas as séries de R$5-7 no gráfico de evolução, tornando o visual ilegível.
 
-O dataset original da ANP contém 7 produtos:
-- GASOLINA COMUM, GASOLINA ADITIVADA, ETANOL HIDRATADO, OLEO DIESEL, OLEO DIESEL S10 → vendidos em postos
-- GLP (R$/13kg — botijão de gás de cozinha) → excluído
-- GNV (R$/m³ — gás natural veicular) → excluído
+Os 5 produtos mantidos compartilham a mesma unidade (R$/l), então as comparações entre produtos e entre estados fazem sentido.
 
-Motivo: o projeto "Radar Combustíveis BR" monitora preços em postos de
-abastecimento. GLP e GNV possuem unidades incomparáveis com os demais
-(R$/13kg e R$/m³ vs R$/l), distorciam KPIs e tornavam visuais ilegíveis
-(GLP ~R$100 comprimia todas as outras séries no gráfico de evolução).
+## Decisão — task `tratar` (separação de responsabilidades)
 
-Os 5 produtos mantidos compartilham a mesma unidade (R$/l), tornando
-comparações entre produtos e entre estados matematicamente válidas.
+Criei `scripts/tratamento.py` com uma task dedicada ao tratamento, separando o que estava misturado no `extrair.py`:
 
-## Decisão — Task `tratar` (separação de responsabilidades)
+- `extrair`: ler o Excel, filtrar por data, salvar parquet
+- `tratar`: substituir traços por None, filtrar produtos válidos
 
-Criamos `scripts/tratar.py` com uma task dedicada ao tratamento de dados,
-separando responsabilidades que estavam misturadas no `extrair.py`:
+Cadeia do DAG depois da refatoração:
+```
+extrair → tratar → validar → carregar → atualizar_staging → atualizar_mart
+```
 
-- `extrair`: ler Excel, filtrar por data, salvar parquet — só extração
-- `tratar`: substituir traços por None, filtrar produtos válidos — só tratamento
+O filtro de produtos usa `df[df["PRODUTO"].isin(PRODUTOS_POSTO)]`. A lista `PRODUTOS_POSTO` fica no topo do `tratamento.py`.
 
-Cadeia do DAG após refatoração:
-  extrair → tratar → validar → carregar → atualizar_staging → atualizar_mart
-
-O filtro de produtos usa df[df["PRODUTO"].isin(PRODUTOS_POSTO)],
-equivalente ao WHERE PRODUTO IN (...) do SQL. A lista PRODUTOS_POSTO
-é centralizada no topo do tratar.py, fácil de manter em numa v2.
-
-**Impacto na validação:**
-Com GLP e GNV removidos antes da validação, a lista de unidades válidas
-reduziu de 5 variantes para 1: ['R$/l']. A validação ficou mais forte —
-qualquer unidade diferente de R$/l é capturada como erro real.
+Com GLP e GNV removidos antes da validação, a lista de unidades aceitas pelo Pandera reduziu de 5 variantes para 1: `['R$/l']`. Qualquer unidade diferente agora é um erro real, não um produto fora do escopo.
 
 ## Fase 5 — Power BI: modelagem e DAX
 
-**Decisão: Importar vs DirectQuery**
+**Importar vs DirectQuery.** Escolhi o modo Importar. O volume de 112k linhas cabe na memória, o dado é semanal (não precisa de tempo real) e os visuais respondem sem latência. DirectQuery faria sentido para dados em tempo real ou volumes que não cabem em memória.
 
-Escolhemos o modo Importar (cópia local dos dados) em vez de
-DirectQuery (queries em tempo real no BigQuery). Motivos: volume
-pequeno (~112k linhas) cabe na memória do Power BI; dado é semanal
-(não tempo real); visuais respondem instantaneamente sem custo de
-query a cada interação. DirectQuery faria sentido para dados em
-tempo real ou volumes que não cabem em memória.
+**Tabelas carregadas.** `mart.fato_preco_estados` e `mart.dim_tempo`. A staging não foi carregada porque a fato já tem todos os seus dados. A `controle_carga` foi carregada como referência mas não participa do modelo.
 
-**Decisão: tabelas carregadas no modelo**
+**Relacionamento do modelo estrela.**
 
-Carregadas: mart.fato_preco_estados e mart.dim_tempo.
-A staging não foi carregada porque a fato já contém todos os seus
-dados — carregar as duas seria redundância. O Power BI consome a
-camada mart, não staging. A controle_carga foi carregada como
-referência opcional mas não participa do modelo dimensional.
+`dim_tempo[data]` → `fato_preco_estados[data_inicial]`
+Cardinalidade: um para muitos (1:*). Direção do filtro: única (dim_tempo filtra a fato). `dim_tempo` marcada como Tabela de Datas para que as funções de time intelligence funcionem.
 
-**Relacionamento do modelo estrela**
+**Medidas DAX criadas.**
 
-dim_tempo[data] → fato_preco_estados[data_inicial]
-Cardinalidade: um para muitos (1:*)
-Direção do filtro: único (dim_tempo filtra a fato)
-dim_tempo marcada como Tabela de Datas — obrigatório para funções
-de time intelligence DAX (DATEADD, SAMEPERIODLASTYEAR, etc.)
+DAX (Data Analysis Expressions) é a linguagem de fórmulas do Power BI. Medidas são cálculos que se adaptam ao contexto do visual. São preferíveis a colunas calculadas porque não ocupam memória, são calculadas sob demanda.
 
-**Medidas DAX criadas — o que são e por que essas**
+As 7 medidas respondem às 4 perguntas de negócio:
 
-DAX (Data Analysis Expressions) é a linguagem de fórmulas do Power
-BI. Medidas são cálculos reutilizáveis que se adaptam ao contexto
-do visual (filtros, slicers, drill-down). São preferíveis a colunas
-calculadas porque não ocupam memória — são calculadas sob demanda.
+1. `Preco Medio Revenda`
+   `= AVERAGE(fato_preco_estados[preco_medio_revenda])`
+   Base de todos os outros cálculos. Média do preço no contexto atual do visual.
 
-As 7 medidas criadas respondem às 4 perguntas de negócio do projeto:
+2. `Preco Semana Anterior`
+   `= CALCULATE([Preco Medio Revenda], DATEADD(dim_tempo[data], -7, DAY))`
+   Desloca o contexto de data 7 dias para trás. Exige `dim_tempo` marcada como tabela de datas.
 
-1. Preco Medio Revenda
-   = AVERAGE(fato_preco_estados[preco_medio_revenda])
-   Base de todos os outros cálculos. Média do preço de revenda
-   no contexto do visual (estado, produto, período selecionado).
-
-2. Preco Semana Anterior
-   = CALCULATE([Preco Medio Revenda], DATEADD(dim_tempo[data], -7, DAY))
-   Desloca o contexto de data 7 dias para trás. CALCULATE reexecuta
-   uma medida com filtros diferentes — aqui muda o período avaliado.
-   Exige dim_tempo marcada como tabela de datas para funcionar.
-
-3. Variacao Semanal %
+3. `Variacao Semanal %`
+   ```
    = VAR atual = [Preco Medio Revenda]
      VAR anterior = [Preco Semana Anterior]
      RETURN DIVIDE(atual - anterior, anterior)
-   Variação percentual semana a semana. VAR guarda valores
-   intermediários para reutilização. DIVIDE é divisão segura —
-   retorna BLANK() se denominador for zero, nunca erro.
+   ```
+   `VAR` guarda valores intermediários. `DIVIDE` retorna `BLANK()` se o denominador for zero, em vez de erro.
 
-4. Ranking UF
-   = RANKX(ALL(fato_preco_estados[estado]), [Preco Medio Revenda], , DESC, Dense)
-   Classifica estados por preço médio. ALL() remove o filtro de
-   estado para que o ranking considere sempre todos os 27 estados,
-   mesmo quando o visual está filtrado. Dense: empates recebem o
-   mesmo número sem pular posições.
+4. `Ranking UF`
+   `= RANKX(ALL(fato_preco_estados[estado]), [Preco Medio Revenda], , DESC, Dense)`
+   `ALL()` remove o filtro de estado para que o ranking considere os 27 estados mesmo quando o visual está filtrado. Dense: empates recebem o mesmo número sem pular posições.
 
-5. Media Nacional
-   = CALCULATE([Preco Medio Revenda], ALL(fato_preco_estados[estado]))
-   Preço médio ignorando o filtro de estado — sempre calcula sobre
-   todos os estados. Base para comparações regionais.
+5. `Media Nacional`
+   `= CALCULATE([Preco Medio Revenda], ALL(fato_preco_estados[estado]))`
+   Preço médio ignorando o filtro de estado. Usado como linha de referência nos visuais.
 
-6. Desvio Padrao Preco
-   = STDEVX.P(fato_preco_estados, fato_preco_estados[preco_medio_revenda])
-   Dispersão dos preços entre os registros do contexto atual.
-   STDEVX.P itera linha por linha da tabela (padrão funções X do DAX)
-   e calcula desvio padrão populacional. Quantifica a tese central
-   do projeto: existe dispersão real de preços entre estados.
+6. `Desvio Padrao Preco`
+   `= STDEVX.P(fato_preco_estados, fato_preco_estados[preco_medio_revenda])`
+   Dispersão dos preços no contexto atual. `STDEVX.P` itera linha por linha (padrão das funções X do DAX).
 
-7. Pct Acima Media Nacional
+7. `Pct Acima Media Nacional`
+   ```
    = VAR media = [Media Nacional]
      RETURN DIVIDE(
        CALCULATE(COUNTROWS(fato_preco_estados),
          FILTER(fato_preco_estados, fato_preco_estados[preco_medio_revenda] > media)),
        COUNTROWS(fato_preco_estados))
-   Percentual de registros com preço acima da média nacional.
-   VAR captura o valor da medida antes do FILTER — necessário porque
-   medidas não podem ser usadas diretamente como filtro no CALCULATE
-   (erro: "PLACEHOLDER em expressão True/False"). FILTER itera a
-   tabela e aceita variáveis na condição.
+   ```
+   `VAR` captura o valor da medida antes do `FILTER`. Sem isso, o `CALCULATE` retorna erro porque medidas não podem ser usadas diretamente como condição de filtro.
 
-## Fase 5 — Design dos dashboards
+## Fase 5 — design dos dashboards
 
-**Princípio adotado:** cada visual responde uma pergunta que nenhum outro
-visual na página responde. Visuais redundantes foram eliminados.
+Princípio: cada visual responde uma pergunta que nenhum outro visual na mesma página responde. Se dois visuais mostram a mesma coisa, um sai.
 
 **Página Executiva — estrutura final**
 
-Objetivo: snapshot em 5 segundos ("quanto custa, subiu ou desceu?").
+Objetivo: entender o cenário em 5 segundos.
 
-- KPI Preço Médio Revenda — quanto custa?
-- KPI Variação Semanal % — subiu ou desceu? (formatação verde/vermelho)
-- KPI Dispersão entre estados — quão desigual é o preço entre estados?
-- Barras Top 5 estados mais caros — preview geográfico sem duplicar a analítica
-- Linha Evolução temporal — qual a tendência? (única dimensão de tempo)
-- Cartão Última Atualização — referência temporal dos dados
-- Slicer produto (seleção única) + Slicer data
+- KPI Preço Médio Revenda
+- KPI Variação Semanal % (formatação condicional verde/vermelho)
+- KPI Dispersão entre estados
+- Barras Top 5 estados mais caros
+- Linha de evolução temporal
+- Cartão última atualização
+- Slicer produto (seleção única) + slicer data
 
-Removido: gráfico "Variação semanal por produto" — redundante com o KPI
-de variação quando apenas um produto está selecionado.
+Removido: gráfico "Variação semanal por produto". Com slicer de produto em seleção única, o gráfico mostrava a variação de um só produto, mesma informação do KPI de variação semanal.
 
 **Página Analítica — estrutura final**
 
 Objetivo: investigar padrões entre estados, regiões e produtos.
 
-- Ranking UF (barras + linha referência Média Nacional) — quem paga mais vs média?
-- Evolução por REGIÃO (5 linhas: Norte, Nordeste, Centro-Oeste, Sudeste, Sul)
-  → o gap regional está crescendo? Dimensão tempo + geografia, não existia na executiva.
-  → Norte sistematicamente mais caro por logística amazônica (confirmado nos dados).
-- Variação semanal por produto — qual combustível é mais volátil?
-  → Movido da executiva onde não fazia sentido com seleção única de produto.
-- KPI Dispersão + KPI % Acima da Média — quantificam a tese central do projeto
+- Ranking UF (barras horizontais + linha de referência Média Nacional)
+- Evolução por região (5 linhas: Norte, Nordeste, Centro-Oeste, Sudeste, Sul). O gap regional está crescendo? Essa dimensão de tempo + geografia não existe na executiva.
+- Variação semanal por produto. Qual combustível oscila mais? Movido da executiva, onde não fazia sentido com seleção única.
+- KPI Dispersão + KPI % Acima da Média
 - Slicers: produto (multi-seleção), data, estado
 
-Removido: mapa coroplético — mostrava Preço Médio × estado com encoding de cor,
-mesma informação do ranking de barras com encoding de comprimento. Barras são
-mais precisas para comparação quantitativa. O padrão geográfico (Norte mais caro)
-é capturado pelo gráfico de Evolução por Região com mais contexto temporal.
+Removido: mapa coroplético. Mostrava Preço Médio por estado com encoding de cor, mesma informação do ranking de barras com encoding de comprimento. Barras são mais precisas para comparação quantitativa.
+
+27 estados em um gráfico de linhas produz 27 séries ilegíveis. 5 regiões mostram o padrão macro sem ruído: Norte sistematicamente mais caro, gap se ampliando depois de 2022.
