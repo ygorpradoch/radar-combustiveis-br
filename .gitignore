@@ -4,6 +4,9 @@ gcp/
 
 # variáveis de ambiente com valores reais
 .env
+config/
+logs/
+plugins/
 
 # Python
 __pycache__/
