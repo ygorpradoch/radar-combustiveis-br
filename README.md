@@ -4,9 +4,9 @@ Pipeline de dados que coleta, processa e analisa os preços de combustíveis em 
 
 **[Ver dashboard ao vivo](https://app.powerbi.com/view?r=eyJrIjoiNzQxM2Y2MDUtOWIyNC00Y2U3LWIyYWUtMDNkMjM0YzFkOWE5IiwidCI6ImIxNTZhNTQxLWUyMzYtNGVkYi05MWJmLWZjYTI1YzcwMDRmOSJ9)**
 
-![Dashboard executivo](docs/dashboard-executivo.png)
+![Dashboard executivo](images/dashboard-executivo.png)
 
-![Dashboard analítico](docs/dashboard-analitico.png)
+![Dashboard analítico](images/dashboard-analitico.png)
 
 ## O problema
 
@@ -16,7 +16,7 @@ Esse projeto automatiza o processo do início ao fim.
 
 ## Arquitetura
 
-![Diagrama de arquitetura](docs/arquitetura.png)
+![Diagrama de arquitetura](images/arquitetura.png)
 
 O dado percorre seis etapas orquestradas pelo Airflow:
 
